@@ -316,6 +316,20 @@ static int uvc_status_start(struct uvc_device *dev, gfp_t flags)
 	if (!dev->int_urb)
 		return 0;
 
+	/*
+	 * If the previous uvc_status_stop() call was from the async work, the
+	 * work may still be running. Wait for it to finish before we submit the
+	 * urb.
+	 */
+	flush_work(&dev->async_ctrl.work);
+
+	/*
+	 * Clear the flush status. The barrier is needed to make sure that
+	 * flush_status is visible to uvc_ctrl_status_event_work() before the
+	 * URB it may resubmit is in flight.
+	 */
+	smp_store_release(&dev->flush_status, false);
+
 	return usb_submit_urb(dev->int_urb, flags);
 }
 
@@ -335,6 +349,16 @@ static void uvc_status_stop(struct uvc_device *dev)
 	 * called below.
 	 */
 	smp_store_release(&dev->flush_status, true);
+
+	/*
+	 * If we are called from the event work function, the URB is guaranteed
+	 * to not be in flight as it has completed and has not been resubmitted.
+	 * There's no need to cancel the work (which would deadlock), or to kill
+	 * the URB. flush_status stays set until uvc_status_start() clears it,
+	 * which also flushes this work first.
+	 */
+	if (current_work() == &w->work)
+		return;
 
 	/*
 	 * Cancel any pending asynchronous work. If any status event was queued,
@@ -357,12 +381,9 @@ static void uvc_status_stop(struct uvc_device *dev)
 
 	/*
 	 * From this point, there are no events on the queue and the status URB
-	 * is dead. No events will be queued until uvc_status_start() is called.
-	 * The barrier is needed to make sure that flush_status is visible to
-	 * uvc_ctrl_status_event_work() when uvc_status_start() will be called
-	 * again.
+	 * is dead. No events will be queued until uvc_status_start() is called,
+	 * which is also where flush_status is cleared again.
 	 */
-	smp_store_release(&dev->flush_status, false);
 }
 
 int uvc_status_resume(struct uvc_device *dev)
