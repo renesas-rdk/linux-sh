@@ -955,3 +955,12 @@
 &sensor_thermal_ddr1 {
 	critical-action = "shutdown";
 };
+
+&i2c3 {
+	status = "okay";
+};
+
+&i2c4 {
+	status = "okay";
+};
+
