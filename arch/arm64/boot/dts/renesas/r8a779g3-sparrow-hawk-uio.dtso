@@ -7,6 +7,5 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/power/r8a779g0-sysc.h>
 
-#include "r8a779g3-sparrow-hawk-uio.dtsi"
-#include "r8a779g3-sparrow-hawk-cmem.dtsi"
-
+#include "sparrow-hawk-uio.dtsi"
+#include "sparrow-hawk-cmem.dtsi"
