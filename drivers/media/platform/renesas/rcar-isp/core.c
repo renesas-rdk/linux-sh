@@ -398,7 +398,7 @@ static int risp_core_config_output(struct rcar_isp_core *core,
 
 	/* Set image out flush EOF. */
 	risp_core_write(core, ISPCORE_DMA_IMAGE_FLUSH_OUT_REG(index),
-			pix->plane_fmt[0].bytesperline <<
+			ALIGN(pix->width, 256) <<
 			ISPCORE_DMA_IMAGE_FLUSH_OUT_PADDING_PIXEL_EOF_SHIFT);
 
 	/* Enable DMA and set burst length. */
