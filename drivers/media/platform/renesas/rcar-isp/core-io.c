@@ -5,6 +5,8 @@
  * Copyright (C) 2026 Ragnatech AB
  */
 
+#include <linux/sizes.h>
+
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-event.h>
 #include <media/v4l2-ioctl.h>
@@ -329,6 +331,7 @@ static void risp_io_input_try_format(struct rcar_isp_core_io *io,
 				     struct v4l2_pix_format_mplane *pix)
 {
 	unsigned int bpp = 0;
+	unsigned int bpl;
 
 	v4l_bound_align_image(&pix->width, 128, 5120, 2,
 			      &pix->height, 128, 4096, 2, 0);
@@ -345,11 +348,17 @@ static void risp_io_input_try_format(struct rcar_isp_core_io *io,
 		bpp = risp_io_input_formats[0].bpp;
 	}
 
+	/*
+	 * Honour the line stride requested by userspace, the buffers are
+	 * shared with the VIN which may use a larger stride than the minimum.
+	 */
+	bpl = max(pix->width * bpp, min(pix->plane_fmt[0].bytesperline, SZ_64K));
+
 	pix->field = V4L2_FIELD_NONE;
 	pix->colorspace = V4L2_COLORSPACE_RAW;
 
 	pix->num_planes = 1;
-	pix->plane_fmt[0].bytesperline = pix->width * bpp;
+	pix->plane_fmt[0].bytesperline = bpl;
 	pix->plane_fmt[0].sizeimage = pix->plane_fmt[0].bytesperline * pix->height;
 }
 
