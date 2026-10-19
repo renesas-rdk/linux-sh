@@ -760,6 +760,39 @@ static void risp_io_capture_try_format(struct rcar_isp_core_io *io,
 	pix->xfer_func = V4L2_XFER_FUNC_SRGB;
 
 	switch (pix->pixelformat) {
+	case V4L2_PIX_FMT_NV12M:
+		pix->quantization = V4L2_QUANTIZATION_LIM_RANGE;
+		pix->num_planes = 2;
+		/*
+		 * The DMA-engine still outputs pixels for the height lines of
+		 * the CrCb plane. To produce a NV12 frame we must ensure all
+		 * these blank pixels are in the padding area of the frame.
+		 *
+		 * To do this the stride of the CrCb plane need to be half that
+		 * of the Y plane. The first "DMA-engine line" will write the
+		 * CrCb data + some blank padding, while the second "DMA-engine
+		 * line" will only write blank padding bytes. Two "DMA-engine
+		 * lines" will then create one correct NV12 line in the CrCb
+		 * plane.
+		 *
+		 * All frame data also needs to fits in the first half of the
+		 * line. The strict DMA flush settings used already ensures
+		 * this is always the case.
+		 *
+		 * Finally the NV12 stride of the Y and CrCb plane must be the
+		 * same and the R-Car ISP needs the hardware stride to be 256
+		 * byte aligned. By align the Y plane lines to 512 bytes the
+		 * CrCb planes hardware stride is always aligned with 256 when
+		 * cut in half.
+		 */
+		pix->plane_fmt[0].bytesperline =
+			ALIGN(risp_io_calture_bytesperline(pix->width, 1), 512);
+		pix->plane_fmt[0].sizeimage = pix->plane_fmt[0].bytesperline * pix->height;
+		/* Both planes must have the same length. */
+		pix->plane_fmt[1].bytesperline = pix->plane_fmt[0].bytesperline;
+		/* The CrCb plane is half height of the Y plane. */
+		pix->plane_fmt[1].sizeimage = pix->plane_fmt[1].bytesperline * pix->height / 2;
+		break;
 	case V4L2_PIX_FMT_NV16M:
 		pix->quantization = V4L2_QUANTIZATION_LIM_RANGE;
 		pix->num_planes = 2;
@@ -786,9 +819,12 @@ static int risp_io_capture_enum_fmt(struct file *file, void *priv,
 
 	switch (f->index) {
 	case 0:
-		f->pixelformat = V4L2_PIX_FMT_NV16M;
+		f->pixelformat = V4L2_PIX_FMT_NV12M;
 		break;
 	case 1:
+		f->pixelformat = V4L2_PIX_FMT_NV16M;
+		break;
+	case 2:
 		f->pixelformat = V4L2_PIX_FMT_XBGR32;
 		break;
 	default:
@@ -846,6 +882,7 @@ static int risp_io_capture_enum_framesizes(struct file *file, void *fh,
 		return -EINVAL;
 
 	switch (fsize->pixel_format) {
+	case V4L2_PIX_FMT_NV12M:
 	case V4L2_PIX_FMT_NV16M:
 	case V4L2_PIX_FMT_XBGR32:
 		break;

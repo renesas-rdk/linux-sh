@@ -341,6 +341,45 @@ static int risp_core_config_output(struct rcar_isp_core *core,
 	/* For all frame capture slots. */
 	for (unsigned int frame = 0; frame < 4; frame++) {
 		switch (pix->pixelformat) {
+		case V4L2_PIX_FMT_NV12M:
+			risp_core_write(core,
+					ISPCORE_DMA_IMAGE_FRAME_MODE(index, frame),
+					1);
+			risp_core_write(core,
+					ISPCORE_DMA_IMAGE_FRAME_PIXEL_POSITION(index, frame),
+					0 << 24 | 0 << 16 | 4 << 8 | 16 << 0);
+			risp_core_write(core,
+					ISPCORE_DMA_IMAGE_FRAME_PIXEL_BITWIDTH_MINUS1(index, frame),
+					0 << 24 | 0 << 16 | 7 << 8 | 7 << 0);
+			/*
+			 * Pick CrCb data from even lines.
+			 *
+			 * The datasheet suggest taking the odd lines but that
+			 * would require padding at the start of the buffer to
+			 * create valid NV12 frame, or start writing outside the
+			 * buffer potentially corrupting memory.
+			 */
+			risp_core_write(core,
+					ISPCORE_DMA_IMAGE_FRAME_PIXEL_BPP(index, frame),
+					0 << 28 | 0 << 24 |
+					0 << 20 | 0 << 16 |
+					1 << 12 | 0 << 8 |
+					3 << 4  | 0 << 0);
+
+			risp_core_write(core,
+					ISPCORE_DMA_IMAGE_FRAME_STRIDE_COMP0(index, frame),
+					pix->plane_fmt[0].bytesperline);
+			/*
+			 * Stride of CrCb plane needs be cut in half as the
+			 * DMA-engine writes blank pixels for the lines not
+			 * processed.
+			 *
+			 * See risp_io_capture_try_format() for details.
+			 */
+			risp_core_write(core,
+					ISPCORE_DMA_IMAGE_FRAME_STRIDE_COMP1(index, frame),
+					pix->plane_fmt[1].bytesperline / 2);
+			break;
 		case V4L2_PIX_FMT_NV16M:
 			risp_core_write(core,
 					ISPCORE_DMA_IMAGE_FRAME_MODE(index, frame),
@@ -436,6 +475,7 @@ static u32 risp_core_pix2bus(const struct rcar_isp_core_io *io)
 		return MEDIA_BUS_FMT_SRGGB12_1X12;
 	case V4L2_PIX_FMT_XBGR32:
 		return MEDIA_BUS_FMT_RGB888_1X24;
+	case V4L2_PIX_FMT_NV12M:
 	case V4L2_PIX_FMT_NV16M:
 		return MEDIA_BUS_FMT_YUYV12_1X24;
 	default:
