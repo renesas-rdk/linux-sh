@@ -126,8 +126,7 @@ static void risp_core_job_run_output(struct rcar_isp_core *core,
 		mem = vb2_dma_contig_plane_dma_addr(&buf->vb.vb2_buf, 0);
 		risp_core_write(core, reg, mem);
 
-		/* Only NV16 uses 2 planes. */
-		if (fmt->fmt.pix_mp.pixelformat != V4L2_PIX_FMT_NV16M)
+		if (fmt->fmt.pix_mp.num_planes != 2)
 			continue;
 
 		reg = ISPCORE_DMA_IMAGE_FRAME_BASE_ADDRESS_COMP1(0, frame);
