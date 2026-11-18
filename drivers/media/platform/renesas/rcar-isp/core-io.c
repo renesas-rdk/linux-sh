@@ -5,6 +5,8 @@
  * Copyright (C) 2026 Ragnatech AB
  */
 
+#include <linux/sizes.h>
+
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-event.h>
 #include <media/v4l2-ioctl.h>
@@ -329,6 +331,7 @@ static void risp_io_input_try_format(struct rcar_isp_core_io *io,
 				     struct v4l2_pix_format_mplane *pix)
 {
 	unsigned int bpp = 0;
+	unsigned int bpl;
 
 	v4l_bound_align_image(&pix->width, 128, 5120, 2,
 			      &pix->height, 128, 4096, 2, 0);
@@ -345,11 +348,17 @@ static void risp_io_input_try_format(struct rcar_isp_core_io *io,
 		bpp = risp_io_input_formats[0].bpp;
 	}
 
+	/*
+	 * Honour the line stride requested by userspace, the buffers are
+	 * shared with the VIN which may use a larger stride than the minimum.
+	 */
+	bpl = max(pix->width * bpp, min(pix->plane_fmt[0].bytesperline, SZ_64K));
+
 	pix->field = V4L2_FIELD_NONE;
 	pix->colorspace = V4L2_COLORSPACE_RAW;
 
 	pix->num_planes = 1;
-	pix->plane_fmt[0].bytesperline = pix->width * bpp;
+	pix->plane_fmt[0].bytesperline = bpl;
 	pix->plane_fmt[0].sizeimage = pix->plane_fmt[0].bytesperline * pix->height;
 }
 
@@ -717,6 +726,28 @@ static const struct v4l2_pix_format_mplane risp_io_capture_default_format = {
 	},
 };
 
+static unsigned int risp_io_calture_bytesperline(unsigned int width, unsigned int bpp)
+{
+	/*
+	 * The datasheet specifies strict alignment and padding rules to be able
+	 * to flush out all the pixels. Each line must be 256 byte aligned and
+	 * at the end of the frame at least one extra line of space must be
+	 * available.
+	 *
+	 * As we can't extend the buffer with one extra line we need to work
+	 * with stride setting to satisfy both constraints. Fortunately the
+	 * datasheet gives us a calculation for this.
+	 *
+	 *   FLUSH[pixels] = ALIGN(WIDTH[pixels], 256)
+	 *
+	 *   PADDING[bytes] = ALIGN(BPP[bytes] * WIDTH[pixels], 256) - BPP[bytes] * WIDTH[pixels] + BPP[bytes] * FLUSH[pixels]
+	 */
+	unsigned int data = bpp * width;
+	unsigned int padding = ALIGN(data, 256) - data + bpp * ALIGN(width, 256);
+
+	return data + padding;
+}
+
 static void risp_io_capture_try_format(struct rcar_isp_core_io *io,
 				       struct v4l2_pix_format_mplane *pix)
 {
@@ -729,19 +760,52 @@ static void risp_io_capture_try_format(struct rcar_isp_core_io *io,
 	pix->xfer_func = V4L2_XFER_FUNC_SRGB;
 
 	switch (pix->pixelformat) {
+	case V4L2_PIX_FMT_NV12M:
+		pix->quantization = V4L2_QUANTIZATION_LIM_RANGE;
+		pix->num_planes = 2;
+		/*
+		 * The DMA-engine still outputs pixels for the height lines of
+		 * the CrCb plane. To produce a NV12 frame we must ensure all
+		 * these blank pixels are in the padding area of the frame.
+		 *
+		 * To do this the stride of the CrCb plane need to be half that
+		 * of the Y plane. The first "DMA-engine line" will write the
+		 * CrCb data + some blank padding, while the second "DMA-engine
+		 * line" will only write blank padding bytes. Two "DMA-engine
+		 * lines" will then create one correct NV12 line in the CrCb
+		 * plane.
+		 *
+		 * All frame data also needs to fits in the first half of the
+		 * line. The strict DMA flush settings used already ensures
+		 * this is always the case.
+		 *
+		 * Finally the NV12 stride of the Y and CrCb plane must be the
+		 * same and the R-Car ISP needs the hardware stride to be 256
+		 * byte aligned. By align the Y plane lines to 512 bytes the
+		 * CrCb planes hardware stride is always aligned with 256 when
+		 * cut in half.
+		 */
+		pix->plane_fmt[0].bytesperline =
+			ALIGN(risp_io_calture_bytesperline(pix->width, 1), 512);
+		pix->plane_fmt[0].sizeimage = pix->plane_fmt[0].bytesperline * pix->height;
+		/* Both planes must have the same length. */
+		pix->plane_fmt[1].bytesperline = pix->plane_fmt[0].bytesperline;
+		/* The CrCb plane is half height of the Y plane. */
+		pix->plane_fmt[1].sizeimage = pix->plane_fmt[1].bytesperline * pix->height / 2;
+		break;
 	case V4L2_PIX_FMT_NV16M:
 		pix->quantization = V4L2_QUANTIZATION_LIM_RANGE;
 		pix->num_planes = 2;
-		pix->plane_fmt[0].bytesperline = ALIGN(pix->width, 256);
+		pix->plane_fmt[0].bytesperline = risp_io_calture_bytesperline(pix->width, 1);
 		pix->plane_fmt[0].sizeimage = pix->plane_fmt[0].bytesperline * pix->height;
-		pix->plane_fmt[1].bytesperline = ALIGN(pix->width, 256);
+		pix->plane_fmt[1].bytesperline = pix->plane_fmt[0].bytesperline;
 		pix->plane_fmt[1].sizeimage = pix->plane_fmt[1].bytesperline * pix->height;
 		break;
 	default:
 		pix->pixelformat = V4L2_PIX_FMT_XBGR32;
 		pix->quantization = V4L2_QUANTIZATION_FULL_RANGE;
 		pix->num_planes = 1;
-		pix->plane_fmt[0].bytesperline = ALIGN(pix->width * 4, 256);
+		pix->plane_fmt[0].bytesperline = risp_io_calture_bytesperline(pix->width, 4);
 		pix->plane_fmt[0].sizeimage = pix->plane_fmt[0].bytesperline * pix->height;
 		break;
 	}
@@ -755,9 +819,12 @@ static int risp_io_capture_enum_fmt(struct file *file, void *priv,
 
 	switch (f->index) {
 	case 0:
-		f->pixelformat = V4L2_PIX_FMT_NV16M;
+		f->pixelformat = V4L2_PIX_FMT_NV12M;
 		break;
 	case 1:
+		f->pixelformat = V4L2_PIX_FMT_NV16M;
+		break;
+	case 2:
 		f->pixelformat = V4L2_PIX_FMT_XBGR32;
 		break;
 	default:
@@ -815,6 +882,7 @@ static int risp_io_capture_enum_framesizes(struct file *file, void *fh,
 		return -EINVAL;
 
 	switch (fsize->pixel_format) {
+	case V4L2_PIX_FMT_NV12M:
 	case V4L2_PIX_FMT_NV16M:
 	case V4L2_PIX_FMT_XBGR32:
 		break;
