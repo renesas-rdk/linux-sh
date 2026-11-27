@@ -1,0 +1,10 @@
+/dts-v1/;
+/plugin/;
+
+&pciec0 {
+	status = "disabled";
+};
+
+&pciec0_ep {
+	status = "okay";
+};
